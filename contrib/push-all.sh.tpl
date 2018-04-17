@@ -38,6 +38,7 @@ function sync() {
 %{push_statements}
 
 # Wait for all of the subprocesses, failing the script if any of them failed.
-for pid in ${PIDS[@]}; do
-    wait ${pid}
-done
+if len(PIDS) > 0:
+    for pid in ${PIDS[@]}; do
+        wait ${pid}
+    done
