@@ -76,14 +76,13 @@ def _impl(ctx):
 
     scripts += [out]
     runfiles += [out]
-    sleep(ctx.attr.delay)
 
 
   ctx.template_action(
     template = ctx.file._all_tpl,
     substitutions = {
       "%{push_statements}": "\n".join([
-        'async "%s"' % _get_runfile_path(ctx, command)
+        'sync "%s"' % _get_runfile_path(ctx, command)
         for command in scripts
       ]),
     },
@@ -105,7 +104,6 @@ container_push = rule(
                 "Docker",
             ],
         ),
-        "delay": attr.int(default=0, mandatory=False),
         "_all_tpl": attr.label(
             default = Label("//contrib:push-all.sh.tpl"),
             single_file = True,
