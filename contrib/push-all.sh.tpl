@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -eu
+set -e
 
 function guess_runfiles() {
     pushd ${BASH_SOURCE[0]}.runfiles > /dev/null 2>&1
@@ -28,6 +28,11 @@ function async() {
     # Launch the command asynchronously and track its process id.
     PYTHON_RUNFILES=${RUNFILES} "$@" &
     PIDS+=($!)
+}
+
+function sync() {
+    # Launch the command synchronously.
+    PYTHON_RUNFILES=${RUNFILES} "$@"
 }
 
 %{push_statements}

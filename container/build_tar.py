@@ -13,9 +13,11 @@
 # limitations under the License.
 """This tool build tar files from a list of inputs."""
 
+from contextlib import contextmanager
 import os
 import os.path
 import sys
+import re
 import tarfile
 import tempfile
 
@@ -28,6 +30,8 @@ gflags.MarkFlagAsRequired('output')
 gflags.DEFINE_multistring('file', [], 'A file to add to the layer')
 
 gflags.DEFINE_multistring('empty_file', [], 'An empty file to add to the layer')
+
+gflags.DEFINE_multistring('empty_dir', [], 'An empty dir to add to the layer')
 
 gflags.DEFINE_string(
     'mode', None, 'Force the mode on the added files (in octal).')
@@ -79,6 +83,18 @@ class TarFile(object):
   class DebError(Exception):
     pass
 
+  PKG_NAME_RE = re.compile(r'Package:\s*(?P<pkg_name>\w+).*')
+  DPKG_STATUS_DIR = '/var/lib/dpkg/status.d'
+  PKG_METADATA_FILE = 'control'
+
+  @staticmethod
+  def parse_pkg_name(metadata, filename):
+    pkg_name_match = TarFile.PKG_NAME_RE.match(metadata)
+    if pkg_name_match:
+      return pkg_name_match.group('pkg_name')
+    else:
+      return os.path.basename(os.path.splitext(filename)[0])
+
   def __init__(self, output, directory, compression):
     self.directory = directory
     self.output = output
@@ -123,15 +139,16 @@ class TarFile(object):
         uname=names[0],
         gname=names[1])
 
-  def add_empty_file(self, destfile, mode=None, ids=None, names=None):
+  def add_empty_file(self, destfile, mode=None, ids=None, names=None,
+                     kind=tarfile.REGTYPE):
     """Add a file to the tar file.
 
     Args:
        destfile: the name of the file in the layer
-       mode: force to set the specified mode, by
-          default the value from the source is taken.
+       mode: force to set the specified mode, defaults to 644
        ids: (uid, gid) for the file to set ownership
        names: (username, groupname) for the file to set ownership.
+       kind: type of the file. tarfile.DIRTYPE for directory.
 
     An empty file will be created as `destfile` in the layer.
     """
@@ -146,12 +163,27 @@ class TarFile(object):
     dest = os.path.normpath(dest)
     self.tarfile.add_file(
         dest,
-        content='',
+        content='' if kind == tarfile.REGTYPE else None,
+        kind=kind,
         mode=mode,
         uid=ids[0],
         gid=ids[1],
         uname=names[0],
         gname=names[1])
+
+  def add_empty_dir(self, destpath, mode=None, ids=None, names=None):
+    """Add a directory to the tar file.
+
+    Args:
+       destpath: the name of the directory in the layer
+       mode: force to set the specified mode, defaults to 644
+       ids: (uid, gid) for the file to set ownership
+       names: (username, groupname) for the file to set ownership.
+
+    An empty file will be created as `destfile` in the layer.
+    """
+    self.add_empty_file(destpath, mode=mode, ids=ids, names=names,
+                        kind=tarfile.DIRTYPE)
 
   def add_tar(self, tar):
     """Merge a tar file into the destination tar file.
@@ -178,6 +210,35 @@ class TarFile(object):
     symlink = os.path.normpath(symlink)
     self.tarfile.add_file(symlink, tarfile.SYMTYPE, link=destination)
 
+  @contextmanager
+  def write_temp_file(self, data, suffix='tar', mode='wb'):
+    (_, tmpfile) = tempfile.mkstemp(suffix=suffix)
+    try:
+      with open(tmpfile, mode='wb') as f:
+        f.write(data)
+      yield tmpfile
+    finally:
+      os.remove(tmpfile)
+
+  def add_pkg_metadata(self, metadata_tar, deb):
+    try:
+      with tarfile.open(metadata_tar) as tar:
+        # Metadata is expected to be in a file.
+        control_file_member = filter(lambda f: os.path.basename(f.name) == TarFile.PKG_METADATA_FILE, tar.getmembers())
+        if not control_file_member:
+           raise self.DebError(deb + ' does not Metadata File!')
+        control_file = tar.extractfile(control_file_member[0])
+        metadata = ''.join(control_file.readlines())
+        destination_file = os.path.join(TarFile.DPKG_STATUS_DIR,
+                                        TarFile.parse_pkg_name(metadata, deb))
+        with self.write_temp_file(data=metadata) as metadata_file:
+          self.add_file(metadata_file, destination_file)
+    except (KeyError, TypeError) as e:
+      raise self.DebError(deb + ' contains invalid Metadata! Exeception {0}'.format(e))
+    except Exception as e:
+      raise self.DebError('Unknown Exception {0}. Please report an issue at'
+                          ' github.com/bazelbuild/rules_docker.'.format(e))
+
   def add_deb(self, deb):
     """Extract a debian package in the output tar.
 
@@ -191,18 +252,30 @@ class TarFile(object):
     Raises:
       DebError: if the format of the deb archive is incorrect.
     """
+    pkg_data_found = False
+    pkg_metadata_found = False
     with archive.SimpleArFile(deb) as arfile:
       current = arfile.next()
-      while current and not current.filename.startswith('data.'):
+      while current:
+        parts = current.filename.split(".")
+        name = parts[0]
+        ext = '.'.join(parts[1:])
+        if name == 'data':
+          pkg_data_found = True
+          # Add pkg_data to image tar
+          with self.write_temp_file(suffix=ext, data=current.data) as tmpfile:
+            self.add_tar(tmpfile)
+        elif name == 'control':
+          pkg_metadata_found = True
+          # Add metadata file to image tar
+          with self.write_temp_file(suffix=ext, data=current.data) as tmpfile:
+            self.add_pkg_metadata(metadata_tar=tmpfile, deb=deb)
         current = arfile.next()
-      if not current:
-        raise self.DebError(deb + ' does not contains a data file!')
-      tmpfile = tempfile.mkstemp(suffix=os.path.splitext(current.filename)[-1])
-      with open(tmpfile[1], 'wb') as f:
-        f.write(current.data)
-      self.add_tar(tmpfile[1])
-      os.remove(tmpfile[1])
 
+    if not pkg_data_found:
+      raise self.DebError(deb + ' does not contains a data file!')
+    if not pkg_metadata_found:
+      raise self.DebError(deb + ' does not contains a control file!')
 
 def main(unused_argv):
   # Parse modes arguments
@@ -244,23 +317,22 @@ def main(unused_argv):
 
   # Add objects to the tar file
   with TarFile(FLAGS.output, FLAGS.directory, FLAGS.compression) as output:
+    def file_attributes(filename):
+      if filename[0] == '/':
+        filename = filename[1:]
+      return {
+          'mode': mode_map.get(filename, default_mode),
+          'ids': ids_map.get(filename, default_ids),
+          'names': names_map.get(filename, default_ownername),
+      }
+
     for f in FLAGS.file:
       (inf, tof) = f.split('=', 1)
-      mode = default_mode
-      ids = default_ids
-      names = default_ownername
-      map_filename = tof
-      if tof[0] == '/':
-        map_filename = tof[1:]
-      if map_filename in mode_map:
-        mode = mode_map[map_filename]
-      if map_filename in ids_map:
-        ids = ids_map[map_filename]
-      if map_filename in names_map:
-        names = names_map[map_filename]
-      output.add_file(inf, tof, mode, ids, names)
+      output.add_file(inf, tof, **file_attributes(tof))
     for f in FLAGS.empty_file:
-      output.add_empty_file(f)
+      output.add_empty_file(f, **file_attributes(f))
+    for f in FLAGS.empty_dir:
+      output.add_empty_dir(f, **file_attributes(f))
     for tar in FLAGS.tar:
       output.add_tar(tar)
     for deb in FLAGS.deb:

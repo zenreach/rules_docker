@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import cStringIO
+import datetime
 import json
 import os
 import tarfile
@@ -66,6 +67,14 @@ class ImageTest(unittest.TestCase):
       self.assertEqual(2, len(img.fs_layers()))
       self.assertTopLayerContains(img, ['.', './bar'])
 
+  def test_files_in_layer_with_file_base(self):
+    with TestImage('files_in_layer_with_files_base') as img:
+      self.assertDigest(img, '4b008d8241bdbbe930d72d8f0ee7b61d11561946db0fd52d02dbcb8842b3a958')
+      self.assertEqual(3, len(img.fs_layers()))
+      self.assertLayerNContains(img, 2, ['.', './foo'])
+      self.assertLayerNContains(img, 1, ['.', './baz'])
+      self.assertLayerNContains(img, 0, ['.', './bar'])
+
   def test_tar_base(self):
     with TestImage('tar_base') as img:
       self.assertDigest(img, 'df626b895bc8c7b18e6615ac09ffbd0693268a24a817a94030ff88c37602147e')
@@ -82,6 +91,17 @@ class ImageTest(unittest.TestCase):
       self.assertTopLayerContains(img, [
         './asdf', './usr', './usr/bin',
         './usr/bin/miraclegrow'])
+
+  def test_tars_in_layer_with_tar_base(self):
+    with TestImage('tars_in_layer_with_tar_base') as img:
+      self.assertDigest(img, '80f850359828f763ae544f9b7725f89755f1a28a80738a514735becae60924af')
+      self.assertEqual(3, len(img.fs_layers()))
+      self.assertTopLayerContains(img, [
+        './asdf', './usr', './usr/bin',
+        './usr/bin/miraclegrow'])
+      self.assertLayerNContains(img, 1, ['.', './three', './three/three'])
+      self.assertLayerNContains(img, 2, [
+          './usr', './usr/bin', './usr/bin/unremarkabledeath'])
 
   def test_directory_with_tar_base(self):
     with TestImage('directory_with_tar_base') as img:
@@ -119,6 +139,14 @@ class ImageTest(unittest.TestCase):
       self.assertEqual(3, len(img.fs_layers()))
       self.assertTopLayerContains(img, ['.', './foo'])
 
+  def test_layers_with_docker_tarball_base(self):
+    with TestImage('layers_with_docker_tarball_base') as img:
+      self.assertDigest(img, '927b3b98286e16727e2144152efb90f7394b0ad37d16668d40ce22b9e49debf9')
+      self.assertEqual(5, len(img.fs_layers()))
+      self.assertTopLayerContains(img, ['.', './foo'])
+      self.assertLayerNContains(img, 1, ['.', './three', './three/three'])
+      self.assertLayerNContains(img, 2, ['.', './baz'])
+
   def test_base_with_entrypoint(self):
     with TestImage('base_with_entrypoint') as img:
       self.assertDigest(img, '813cb4af1c3f73cc2b5f837a61dca6a62335b87e5cd762e780286ca99f71ac83')
@@ -153,12 +181,79 @@ class ImageTest(unittest.TestCase):
         '/asdf': {}, '/blah': {}, '/logs': {}
       })
 
+  def test_with_unix_epoch_creation_time(self):
+    with TestImage('with_unix_epoch_creation_time') as img:
+      self.assertDigest(img, '85113de3854559f724a23eed6afea5ceecd5fd4bf241cedaded8af0474d4f882')
+      self.assertEqual(2, len(img.fs_layers()))
+      cfg = json.loads(img.config_file())
+      self.assertEqual('2009-02-13T23:31:30.120000Z', cfg.get('created', ''))
+
+  def test_with_millisecond_unix_epoch_creation_time(self):
+    with TestImage('with_millisecond_unix_epoch_creation_time') as img:
+      self.assertDigest(img, 'e9412cb69da02e05fd5b7f8cc1a5d60139c091362afdc2488f9c8f7c508e5d3b')
+      self.assertEqual(2, len(img.fs_layers()))
+      cfg = json.loads(img.config_file())
+      self.assertEqual('2009-02-13T23:31:30.123450Z', cfg.get('created', ''))
+
+  def test_with_rfc_3339_creation_time(self):
+    with TestImage('with_rfc_3339_creation_time') as img:
+      self.assertDigest(img, '9aeef8cba32f3af6e95a08e60d76cc5e2a46de4847da5366bffeb1b3d7066d17')
+      self.assertEqual(2, len(img.fs_layers()))
+      cfg = json.loads(img.config_file())
+      self.assertEqual('1989-05-03T12:58:12.345Z', cfg.get('created', ''))
+
+  def test_with_stamped_creation_time(self):
+    with TestImage('with_stamped_creation_time') as img:
+      self.assertEqual(2, len(img.fs_layers()))
+      cfg = json.loads(img.config_file())
+      created_str = cfg.get('created', '')
+      self.assertNotEqual('', created_str)
+
+      now = datetime.datetime.utcnow()
+
+      created = datetime.datetime.strptime(created_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+
+      # The BUILD_TIMESTAMP is set by Bazel to Java's CurrentTimeMillis / 1000,
+      # or env['SOURCE_DATE_EPOCH']. For Bazel versions before 0.12, there was
+      # a bug where CurrentTimeMillis was not divided by 1000.
+      # See https://github.com/bazelbuild/bazel/issues/2240
+      # https://bazel-review.googlesource.com/c/bazel/+/48211
+      # Assume that any value for 'created' within a reasonable bound is fine.
+      self.assertLessEqual(now - created, datetime.timedelta(minutes=5))
+
+  def test_with_default_stamped_creation_time(self):
+    # {BUILD_TIMESTAMP} should be the default when `stamp = True` and
+    # `creation_time` isn't explicitly defined.
+    with TestImage('with_default_stamped_creation_time') as img:
+      self.assertEqual(2, len(img.fs_layers()))
+      cfg = json.loads(img.config_file())
+      created_str = cfg.get('created', '')
+      self.assertNotEqual('', created_str)
+
+      now = datetime.datetime.utcnow()
+
+      created = datetime.datetime.strptime(created_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+
+      # The BUILD_TIMESTAMP is set by Bazel to Java's CurrentTimeMillis / 1000,
+      # or env['SOURCE_DATE_EPOCH']. For Bazel versions before 0.12, there was
+      # a bug where CurrentTimeMillis was not divided by 1000.
+      # See https://github.com/bazelbuild/bazel/issues/2240
+      # https://bazel-review.googlesource.com/c/bazel/+/48211
+      # Assume that any value for 'created' within a reasonable bound is fine.
+      self.assertLessEqual(now - created, datetime.timedelta(minutes=5))
+
   def test_with_env(self):
     with TestBundleImage(
         'with_env', 'bazel/%s:with_env' % TEST_DATA_TARGET_BASE) as img:
       self.assertDigest(img, '0b02ba27ff0d63d9430648e47743cba4ae8a1a4f9a80e0e1f9a1fa86835b2b17')
       self.assertEqual(2, len(img.fs_layers()))
       self.assertConfigEqual(img, 'Env', ['bar=blah blah blah', 'foo=/asdf'])
+
+  def test_layers_with_env(self):
+    with TestImage('layers_with_env') as img:
+      self.assertDigest(img, 'ecab0f39b4726e69c62747ce4c1662f697060eef23a26db719a47ea379b77d7f')
+      self.assertEqual(3, len(img.fs_layers()))
+      self.assertConfigEqual(img, 'Env', ['PATH=$PATH:/tmp/a:/tmp/b:/tmp/c', 'a=b', 'x=y'])
 
   def test_dummy_repository(self):
     # We allow users to specify an alternate repository name instead of 'bazel/'
@@ -281,7 +376,7 @@ class ImageTest(unittest.TestCase):
 
   def test_with_passwd(self):
     with TestImage('with_passwd') as img:
-      self.assertDigest(img, '0d373a037dd30a8c37e61f4b40db6c7b55a47d0cdc8688e3679da64f8d4667df')
+      self.assertDigest(img, '27149ceaab154631346209b42c9494708210901fbb6e9f88cb9370fb51f30999')
       self.assertEqual(1, len(img.fs_layers()))
       self.assertTopLayerContains(img, ['.', './etc', './etc/passwd'])
 
@@ -289,7 +384,45 @@ class ImageTest(unittest.TestCase):
       with tarfile.open(fileobj=buf, mode='r') as layer:
         content = layer.extractfile('./etc/passwd').read()
         self.assertEqual(
-          'foobar:x:1234:2345:myusernameinfo:/myhomedir:/myshell\n', content)
+          'root:x:0:0:Root:/root:/rootshell\nfoobar:x:1234:2345:myusernameinfo:/myhomedir:/myshell\n',
+          content)
+
+  def test_with_group(self):
+    with TestImage('with_group') as img:
+      self.assertDigest(img, 'd6384ee5db847e2c8a9e941d78c10bec987aa9cbd4b5b84847e20336ec09d49c')
+      self.assertEqual(1, len(img.fs_layers()))
+      self.assertTopLayerContains(img, ['.', './etc', './etc/group'])
+
+      buf = cStringIO.StringIO(img.blob(img.fs_layers()[0]))
+      with tarfile.open(fileobj=buf, mode='r') as layer:
+        content = layer.extractfile('./etc/group').read()
+        self.assertEqual('root:x:0:\nfoobar:x:2345:foo,bar,baz\n', content)
+
+  def test_with_empty_files(self):
+    with TestImage('with_empty_files') as img:
+      self.assertDigest(img, 'ca83f384d82d79c39ed43dd79b8552e95c050041e7af8bed8ca8af0e291049e1')
+      self.assertEqual(1, len(img.fs_layers()))
+      self.assertTopLayerContains(img, ['.', './file1', './file2'])
+
+      buf = cStringIO.StringIO(img.blob(img.fs_layers()[0]))
+      with tarfile.open(fileobj=buf, mode='r') as layer:
+        for name in ('./file1', './file2'):
+          memberfile = layer.getmember(name)
+          self.assertEqual(0, memberfile.size)
+          self.assertEqual(0o777, memberfile.mode)
+
+  def test_with_empty_dirs(self):
+    with TestImage('with_empty_dirs') as img:
+      self.assertDigest(img, 'f4f102478ccee4a759c37fadfae09ebfdb1be5b4899faeb81ee24afb558b8868')
+      self.assertEqual(1, len(img.fs_layers()))
+      self.assertTopLayerContains(img, ['.', './etc', './foo', './bar'])
+
+      buf = cStringIO.StringIO(img.blob(img.fs_layers()[0]))
+      with tarfile.open(fileobj=buf, mode='r') as layer:
+        for name in ('./etc', './foo', './bar'):
+          memberfile = layer.getmember(name)
+          self.assertEqual(tarfile.DIRTYPE, memberfile.type)
+          self.assertEqual(0o777, memberfile.mode)
 
   def test_py_image(self):
     with TestImage('py_image') as img:
@@ -383,7 +516,7 @@ class ImageTest(unittest.TestCase):
           '/app/io_bazel_rules_docker/testdata/java_image.binary.jar',
           '/app/io_bazel_rules_docker/testdata/java_image.binary'
         ]),
-        '-XX:MaxPermSize=128M', 'examples.images.Binary'])
+        '-XX:MaxPermSize=128M', 'examples.images.Binary', 'arg0', 'arg1'])
 
   def test_war_image(self):
     with TestImage('war_image') as img:
@@ -407,6 +540,104 @@ class ImageTest(unittest.TestCase):
         './jetty/webapps/ROOT/WEB-INF/lib',
         './jetty/webapps/ROOT/WEB-INF/lib/javax.servlet-api-3.0.1.jar',
       ])
+
+
+  def test_cc_image_args(self):
+    with TestImage('cc_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/app/testdata/cc_image.binary',
+        'arg0',
+        'arg1'])
+
+  def test_d_image_args(self):
+    with TestImage('d_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/app/testdata/d_image_binary',
+        'arg0',
+        'arg1'])
+
+  def test_py_image_args(self):
+    with TestImage('py_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/usr/bin/python',
+        '/app/testdata/py_image.binary',
+        'arg0',
+        'arg1'])
+
+  def test_py3_image_args(self):
+    with TestImage('py3_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/usr/bin/python',
+        '/app/testdata/py3_image.binary',
+        'arg0',
+        'arg1'])
+
+  def test_java_image_args(self):
+    with TestImage('java_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/usr/bin/java',
+        '-cp',
+        '/app/io_bazel_rules_docker/testdata/libjava_image_library.jar:'
+        +'/app/io_bazel_rules_docker/../com_google_guava_guava/jar/guava-18.0.jar:'
+        +'/app/io_bazel_rules_docker/testdata/java_image.binary.jar:'
+        +'/app/io_bazel_rules_docker/testdata/java_image.binary',
+        '-XX:MaxPermSize=128M',
+        'examples.images.Binary',
+        'arg0',
+        'arg1'])
+
+  def test_go_image_args(self):
+    with TestImage('go_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/app/testdata/go_image.binary',
+        'arg0',
+        'arg1'])
+
+  def test_go_image_args(self):
+    with TestImage('rust_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/app/testdata/rust_image_binary',
+        'arg0',
+        'arg1'])
+
+  def test_scala_image_args(self):
+    with TestImage('scala_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/usr/bin/java',
+        '-cp',
+        '/app/io_bazel_rules_docker/../com_google_guava_guava/jar/guava-18.0.jar:'+
+        '/app/io_bazel_rules_docker/../scala/lib/scala-library.jar:'+
+        '/app/io_bazel_rules_docker/../scala/lib/scala-reflect.jar:'+
+        '/app/io_bazel_rules_docker/testdata/scala_image_library.jar:'+
+        '/app/io_bazel_rules_docker/testdata/scala_image.binary.jar:'+
+        '/app/io_bazel_rules_docker/testdata/scala_image.binary',
+        'examples.images.Binary',
+        'arg0',
+        'arg1'])
+
+  def test_groovy_image_args(self):
+    with TestImage('groovy_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        '/usr/bin/java',
+        '-cp',
+        '/app/io_bazel_rules_docker/testdata/libgroovy_image_library-impl.jar:'+
+        '/app/io_bazel_rules_docker/../com_google_guava_guava/jar/guava-18.0.jar:'+
+        '/app/io_bazel_rules_docker/../groovy_sdk_artifact/groovy-2.4.4/lib/groovy-2.4.4.jar:'+
+        '/app/io_bazel_rules_docker/testdata/libgroovy_image.binary-lib-impl.jar:'+
+        '/app/io_bazel_rules_docker/testdata/groovy_image.binary.jar:'+
+        '/app/io_bazel_rules_docker/testdata/groovy_image.binary',
+        'examples.images.Binary',
+        'arg0',
+        'arg1'])
+
+  def test_nodejs_image_args(self):
+    with TestImage('nodejs_image') as img:
+      self.assertConfigEqual(img, 'Entrypoint', [
+        'sh',
+        '-c',
+        '/app/testdata/nodejs_image.binary',
+        'arg0',
+        'arg1'])
 
 
 if __name__ == '__main__':

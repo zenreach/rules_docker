@@ -113,7 +113,7 @@ def _jar_dep_layer_impl(ctx):
   return dep_layer_impl(ctx, runfiles=java_files)
 
 jar_dep_layer = rule(
-    attrs = _container.image.attrs + {
+    attrs = dict(_container.image.attrs.items() + {
         # The base image on which to overlay the dependency layers.
         "base": attr.label(mandatory = True),
         # The dependency whose runfiles we're appending.
@@ -129,7 +129,7 @@ jar_dep_layer = rule(
         "directory": attr.string(default = "/app"),
         # https://github.com/bazelbuild/bazel/issues/2176
         "data_path": attr.string(default = "."),
-    },
+    }.items()),
     executable = True,
     outputs = _container.image.outputs,
     implementation = _jar_dep_layer_impl,
@@ -139,7 +139,7 @@ def _jar_app_layer_impl(ctx):
   """Appends the app layer with all remaining runfiles."""
 
   available = depset()
-  for jar in ctx.attr.layers:
+  for jar in ctx.attr.jar_layers:
     available += java_files(jar)
 
   # We compute the set of unavailable stuff by walking deps
@@ -169,7 +169,7 @@ def _jar_app_layer_impl(ctx):
       '-cp',
       # Support optionally passing the classpath as a file.
       '@' + classpath_path if ctx.attr._classpath_as_file else classpath,
-   ] + ctx.attr.jvm_flags + [ctx.attr.main_class]
+   ] + ctx.attr.jvm_flags + [ctx.attr.main_class] + ctx.attr.args
 
   file_map = {
     layer_file_path(ctx, f): f
@@ -183,12 +183,12 @@ def _jar_app_layer_impl(ctx):
     entrypoint=entrypoint)
 
 jar_app_layer = rule(
-    attrs = _container.image.attrs + {
+    attrs = dict(_container.image.attrs.items() + {
         # The binary target for which we are synthesizing an image.
         "binary": attr.label(mandatory = True),
         # The full list of dependencies that have their own layers
         # factored into our base.
-        "layers": attr.label_list(),
+        "jar_layers": attr.label_list(),
         # The rest of the dependencies.
         "deps": attr.label_list(),
         "runtime_deps": attr.label_list(),
@@ -212,7 +212,7 @@ jar_app_layer = rule(
         # https://github.com/bazelbuild/bazel/issues/2176
         "data_path": attr.string(default = "."),
         "legacy_run_behavior": attr.bool(default = False),
-    },
+    }.items()),
     executable = True,
     outputs = _container.image.outputs,
     implementation = _jar_app_layer_impl,
@@ -247,8 +247,8 @@ def java_image(name, base=None, main_class=None,
   visibility = kwargs.get('visibility', None)
   jar_app_layer(name=name, base=base, binary=binary_name,
                  main_class=main_class, jvm_flags=jvm_flags,
-                 deps=deps, runtime_deps=runtime_deps, layers=layers,
-                 visibility=visibility)
+                 deps=deps, runtime_deps=runtime_deps, jar_layers=layers,
+                 visibility=visibility, args=kwargs.get("args"))
 
 def _war_dep_layer_impl(ctx):
   """Appends a layer for a single dependency's runfiles."""
@@ -260,7 +260,7 @@ def _war_dep_layer_impl(ctx):
   )
 
 _war_dep_layer = rule(
-    attrs = _container.image.attrs + {
+    attrs = dict(_container.image.attrs.items() + {
         # The base image on which to overlay the dependency layers.
         "base": attr.label(mandatory = True),
         # The dependency whose runfiles we're appending.
@@ -276,7 +276,7 @@ _war_dep_layer = rule(
         "directory": attr.string(default = "/jetty/webapps/ROOT/WEB-INF/lib"),
         # WE WANT PATHS FLATTENED
         # "data_path": attr.string(default = "."),
-    },
+    }.items()),
     executable = True,
     outputs = _container.image.outputs,
     implementation = _war_dep_layer_impl,
@@ -286,7 +286,7 @@ def _war_app_layer_impl(ctx):
   """Appends the app layer with all remaining runfiles."""
 
   available = depset()
-  for jar in ctx.attr.layers:
+  for jar in ctx.attr.jar_layers:
     available += java_files(jar)
 
   # This is based on rules_appengine's WAR rules.
@@ -302,12 +302,12 @@ def _war_app_layer_impl(ctx):
   return _container.image.implementation(ctx, files=files)
 
 _war_app_layer = rule(
-    attrs = _container.image.attrs + {
+    attrs = dict(_container.image.attrs.items() + {
         # The library target for which we are synthesizing an image.
         "library": attr.label(mandatory = True),
         # The full list of dependencies that have their own layers
         # factored into our base.
-        "layers": attr.label_list(),
+        "jar_layers": attr.label_list(),
         # The base image on which to overlay the dependency layers.
         "base": attr.label(mandatory = True),
         "entrypoint": attr.string_list(default = []),
@@ -323,13 +323,7 @@ _war_app_layer = rule(
         # WE WANT PATHS FLATTENED
         # "data_path": attr.string(default = "."),
         "legacy_run_behavior": attr.bool(default = False),
-        # Run the container using host networking, so that the service is
-        # available to the developer without having to poke around with
-        # docker inspect.
-        "docker_run_flags": attr.string(
-            default = "-i --rm --network=host",
-        ),
-    },
+    }.items()),
     executable = True,
     outputs = _container.image.outputs,
     implementation = _war_app_layer_impl,
@@ -358,5 +352,6 @@ def war_image(name, base=None, deps=[], layers=[], **kwargs):
     base = this_name
 
   visibility = kwargs.get('visibility', None)
-  _war_app_layer(name=name, base=base, library=library_name, layers=layers,
-                 visibility=visibility)
+  tags = kwargs.get('tags', None)
+  _war_app_layer(name=name, base=base, library=library_name, jar_layers=layers,
+                 visibility=visibility, tags=tags)

@@ -14,11 +14,7 @@
 """A rule to flatten container images."""
 
 load(
-    "//skylib:path.bzl",
-    _get_runfile_path = "runfile",
-)
-load(
-    "//container:layers.bzl",
+    "//container:layer_tools.bzl",
     _get_layers = "get_from_target",
     _layer_tools = "tools",
 )
@@ -26,13 +22,12 @@ load(
 def _impl(ctx):
   """Core implementation of container_flatten."""
 
-  image = _get_layers(ctx, ctx.attr.image, ctx.files.image)
+  image = _get_layers(ctx, ctx.attr.image)
 
   # Leverage our efficient intermediate representation to push.
   legacy_base_arg = []
   legacy_files = []
   if image.get("legacy"):
-    # TODO(mattmoor): warn about legacy base.
     legacy_files += [image["legacy"]]
     legacy_base_arg = ["--tarball=%s" % image["legacy"].path]
 
@@ -40,16 +35,22 @@ def _impl(ctx):
   digest_args = ["--digest=" + f.path for f in blobsums]
   blobs = image.get("zipped_layer", [])
   layer_args = ["--layer=" + f.path for f in blobs]
+  uncompressed_blobs = image.get("unzipped_layer", [])
+  uncompressed_layer_args = ["--uncompressed_layer=" + f.path for f in uncompressed_blobs]
+  diff_ids = image.get("diff_id", [])
+  diff_id_args = ["--diff_id=%s" % f.path for f in diff_ids]
   config_arg = "--config=%s" % image["config"].path
 
   ctx.action(
       executable = ctx.executable._flattener,
-      arguments = legacy_base_arg + digest_args + layer_args + [
+      arguments = legacy_base_arg + digest_args + layer_args + diff_id_args +
+                  uncompressed_layer_args + [
           config_arg,
           "--filesystem=" + ctx.outputs.filesystem.path,
           "--metadata=" + ctx.outputs.metadata.path,
       ],
-      inputs = blobsums + blobs + [image["config"]] + legacy_files,
+      inputs = blobsums + blobs + uncompressed_blobs + [image["config"]] +
+               legacy_files + diff_ids,
       outputs = [ctx.outputs.filesystem, ctx.outputs.metadata],
       use_default_shell_env=True,
       mnemonic="Flatten"

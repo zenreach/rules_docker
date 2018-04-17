@@ -19,8 +19,10 @@ load(
     "container_bundle",
     "container_flatten",
     "container_image",
+    "container_layer",
     "container_import",
 )
+load("//testdata:utils.bzl", "generate_deb")
 
 exports_files(["pause.tar"])
 
@@ -83,6 +85,20 @@ container_image(
 )
 
 container_image(
+    name = "files_in_layer_with_files_base",
+    base = ":files_base",
+    files = ["bar"],
+    layers = [":files_in_layer"],
+    mode = "0644",
+)
+
+container_layer(
+    name = "files_in_layer",
+    files = ["baz"],
+    mode = "0644",
+)
+
+container_image(
     name = "tar_base",
     tars = ["one.tar"],
 )
@@ -91,6 +107,19 @@ container_image(
     name = "tar_with_tar_base",
     base = ":tar_base",
     tars = ["two.tar"],
+)
+
+container_image(
+    name = "tars_in_layer_with_tar_base",
+    base = ":tar_base",
+    layers = [":tars_in_layer"],
+    tars = ["two.tar"],
+)
+
+container_layer(
+    name = "tars_in_layer",
+    directory = "/three",
+    tars = ["three.tar"],
 )
 
 container_image(
@@ -123,6 +152,17 @@ container_image(
     name = "docker_tarball_base",
     base = "@pause_tar//image",
     files = ["foo"],
+    mode = "0644",
+)
+
+container_image(
+    name = "layers_with_docker_tarball_base",
+    base = "@pause_tar//image",
+    files = ["foo"],
+    layers = [
+        ":files_in_layer",
+        ":tars_in_layer",
+    ],
     mode = "0644",
 )
 
@@ -205,6 +245,39 @@ container_image(
 # )
 
 container_image(
+    name = "with_unix_epoch_creation_time",
+    base = ":base_with_volume",
+    creation_time = "1234567890.12",
+)
+
+# This is to support bazel < 0.12 BUILD_TIMESTAMPs, which were in milliseconds
+# by default.
+container_image(
+    name = "with_millisecond_unix_epoch_creation_time",
+    base = ":base_with_volume",
+    creation_time = "1234567890123.45",
+)
+
+container_image(
+    name = "with_rfc_3339_creation_time",
+    base = ":base_with_volume",
+    creation_time = "1989-05-03T12:58:12.345Z",
+)
+
+container_image(
+    name = "with_stamped_creation_time",
+    base = ":base_with_volume",
+    creation_time = "{BUILD_TIMESTAMP}",
+    stamp = True,
+)
+
+container_image(
+    name = "with_default_stamped_creation_time",
+    base = ":base_with_volume",
+    stamp = True,
+)
+
+container_image(
     name = "with_env",
     base = ":base_with_volume",
     env = {
@@ -218,6 +291,24 @@ container_image(
     base = ":with_env",
     env = {
         "baz": "${foo} $bar",
+    },
+)
+
+container_image(
+    name = "layers_with_env",
+    base = ":base_with_volume",
+    env = {
+        "PATH": "$PATH:/tmp/b:/tmp/c",
+        "x": "y",
+    },
+    layers = [":env_layer"],
+)
+
+container_layer(
+    name = "env_layer",
+    env = {
+        "PATH": "$PATH:/tmp/a",
+        "a": "b",
     },
 )
 
@@ -346,11 +437,8 @@ py_binary(
     srcs = ["gen_deb.py"],
 )
 
-genrule(
-    name = "generate_deb",
-    outs = ["gen.deb"],
-    cmd = "$(location :gen_deb) $@",
-    tools = [":gen_deb"],
+generate_deb(
+    name = "extras_deb",
 )
 
 # TODO(mattmoor): re-enable once extras.tar works.
@@ -359,7 +447,7 @@ genrule(
 # container_image(
 #     name = "extras_with_deb",
 #     data_path = ".",
-#     debs = [":gen.deb"],
+#     debs = [":extras_deb.deb"],
 #     tars = ["extras.tar"],
 # )
 
@@ -403,16 +491,34 @@ oci_pushall(
     bundle = ":bundle_to_push",
 )
 
-load("//contrib:passwd.bzl", "passwd_file")
+load("//contrib:passwd.bzl", "passwd_entry", "passwd_file")
 
-passwd_file(
-    name = "passwd",
+passwd_entry(
+    name = "root_user",
+    gid = 0,
+    home = "/root",
+    info = "Root",
+    shell = "/rootshell",
+    uid = 0,
+    username = "root",
+)
+
+passwd_entry(
+    name = "foobar_user",
     gid = 2345,
     home = "/myhomedir",
     info = "myusernameinfo",
     shell = "/myshell",
     uid = 1234,
     username = "foobar",
+)
+
+passwd_file(
+    name = "passwd",
+    entries = [
+        ":root_user",
+        ":foobar_user",
+    ],
 )
 
 pkg_tar(
@@ -425,6 +531,64 @@ pkg_tar(
 container_image(
     name = "with_passwd",
     tars = [":passwd_tar"],
+)
+
+load("//contrib:group.bzl", "group_entry", "group_file")
+
+group_entry(
+    name = "root_group",
+    gid = 0,
+    groupname = "root",
+)
+
+group_entry(
+    name = "foobar_group",
+    gid = 2345,
+    groupname = "foobar",
+    users = [
+        "foo",
+        "bar",
+        "baz",
+    ],
+)
+
+group_file(
+    name = "group",
+    entries = [
+        ":root_group",
+        ":foobar_group",
+    ],
+)
+
+pkg_tar(
+    name = "group_tar",
+    srcs = [":group"],
+    mode = "0644",
+    package_dir = "etc",
+)
+
+container_image(
+    name = "with_group",
+    tars = [":group_tar"],
+)
+
+container_image(
+    name = "with_empty_files",
+    empty_files = [
+        "file1",
+        "file2",
+    ],
+    mode = "0o777",
+)
+
+container_image(
+    name = "with_empty_dirs",
+    empty_dirs = [
+        "etc",
+        "foo",
+        "bar",
+    ],
+    mode = "0o777",
 )
 
 container_image(
@@ -496,6 +660,18 @@ py_library(
 py_image(
     name = "py_image",
     srcs = ["py_image.py"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
+    layers = [
+        ":py_image_library",
+    ],
+)
+
+py_image(
+    name = "py_image_with_main",
+    srcs = ["py_image.py"],
     layers = [
         ":py_image_library",
     ],
@@ -506,6 +682,18 @@ load("//python3:image.bzl", "py3_image")
 
 py3_image(
     name = "py3_image",
+    srcs = ["py3_image.py"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
+    layers = [
+        ":py_image_library",
+    ],
+)
+
+py3_image(
+    name = "py3_image_with_main",
     srcs = ["py3_image.py"],
     layers = [
         ":py_image_library",
@@ -524,6 +712,10 @@ cc_library(
 cc_image(
     name = "cc_image",
     srcs = ["cc_image.cc"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
     # This creates an empty layer, due to linking.
     layers = [":cc_image_library"],
 )
@@ -554,6 +746,10 @@ java_library(
 java_image(
     name = "java_image",
     srcs = ["Binary.java"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
     jvm_flags = ["-XX:MaxPermSize=128M"],
     layers = [":java_image_library"],
     main_class = "examples.images.Binary",
@@ -599,6 +795,10 @@ scala_library(
 scala_image(
     name = "scala_image",
     srcs = ["Binary.scala"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
     layers = [":scala_image_library"],
     main_class = "examples.images.Binary",
 )
@@ -622,6 +822,10 @@ groovy_library(
 groovy_image(
     name = "groovy_image",
     srcs = ["Binary.groovy"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
     layers = [":groovy_image_library"],
     main_class = "examples.images.Binary",
 )
@@ -639,7 +843,15 @@ load("//go:image.bzl", "go_image")
 go_image(
     name = "go_image",
     srcs = ["main.go"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
     importpath = "github.com/bazelbuild/rules_docker/docker/testdata",
+    tags = [
+        "tag1",
+        "tag2",
+    ],
 )
 
 load("//rust:image.bzl", "rust_image")
@@ -647,6 +859,10 @@ load("//rust:image.bzl", "rust_image")
 rust_image(
     name = "rust_image",
     srcs = ["main.rs"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
 )
 
 load("//d:image.bzl", "d_image")
@@ -654,13 +870,29 @@ load("//d:image.bzl", "d_image")
 d_image(
     name = "d_image",
     srcs = ["main.d"],
+    args = [
+        "arg0",
+        "arg1",
+    ],
 )
 
 load("//nodejs:image.bzl", "nodejs_image")
 
 nodejs_image(
     name = "nodejs_image",
+    args = [
+        "arg0",
+        "arg1",
+    ],
     data = [":nodejs_image.js"],
     entry_point = "io_bazel_rules_docker/testdata/nodejs_image.js",
     node_modules = "@npm_deps//:node_modules",
+)
+
+generate_deb(
+    name = "pkg1",
+)
+
+generate_deb(
+    name = "pkg2",
 )

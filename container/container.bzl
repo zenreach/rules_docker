@@ -16,6 +16,7 @@
 load("//container:bundle.bzl", "container_bundle")
 load("//container:flatten.bzl", "container_flatten")
 load("//container:image.bzl", "container_image", "image")
+load("//container:layer.bzl", "container_layer")
 load("//container:import.bzl", "container_import")
 load("//container:load.bzl", "container_load")
 load("//container:pull.bzl", "container_pull")
@@ -26,10 +27,11 @@ container = struct(
 )
 
 # The release of the github.com/google/containerregistry to consume.
-CONTAINERREGISTRY_RELEASE = "v0.0.22"
+CONTAINERREGISTRY_RELEASE = "v0.0.26"
 
 # The release of the container-structure-test repository to use.
-STRUCTURE_TEST_RELEASE = "v0.1.1"
+# Updated around 1/22/2018.
+STRUCTURE_TEST_COMMIT = "b97925142b1a09309537e648ade11b4af47ff7ad"
 
 def repositories():
   """Download dependencies of container rules."""
@@ -40,7 +42,7 @@ def repositories():
       name = "puller",
       url = ("https://storage.googleapis.com/containerregistry-releases/" +
              CONTAINERREGISTRY_RELEASE + "/puller.par"),
-      sha256 = "763cb96cb9af7a5a10d52ccffcd157e076e9bb11d6169de44e9e08fe863b6c05",
+      sha256 = "42309ba47bb28d1e1b81ef72789dcca396095e191d4f0e49e2e23c297edd27fb",
       executable = True,
     )
 
@@ -49,7 +51,7 @@ def repositories():
       name = "importer",
       url = ("https://storage.googleapis.com/containerregistry-releases/" +
              CONTAINERREGISTRY_RELEASE + "/importer.par"),
-      sha256 = "5e412dd7d454556012d534a06fd919d91294940a0b67d91a78d3f1f1ca9a9e9e",
+      sha256 = "0a2490584c96bcf961242364d961859b94926182f20a217754730e7097ea6cde",
       executable = True,
     )
 
@@ -153,7 +155,7 @@ py_library(
     native.git_repository(
       name = "structure_test",
       remote = "https://github.com/GoogleCloudPlatform/container-structure-test.git",
-      tag = STRUCTURE_TEST_RELEASE,
+      commit = STRUCTURE_TEST_COMMIT,
   )
 
   # For skylark_library.

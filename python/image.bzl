@@ -68,6 +68,9 @@ def py_image(name, base=None, deps=[], layers=[], **kwargs):
   """
   binary_name = name + ".binary"
 
+  if "main" not in kwargs:
+    kwargs["main"] = name + ".py"
+
   # TODO(mattmoor): Consider using par_binary instead, so that
   # a single target can be used for all three.
   native.py_binary(name=binary_name, deps=deps + layers, **kwargs)
@@ -81,5 +84,7 @@ def py_image(name, base=None, deps=[], layers=[], **kwargs):
     base = this_name
 
   visibility = kwargs.get('visibility', None)
+  tags = kwargs.get('tags', None)
   app_layer(name=name, base=base, entrypoint=['/usr/bin/python'],
-            binary=binary_name, layers=layers, visibility=visibility)
+            binary=binary_name, lang_layers=layers, visibility=visibility,
+            tags=tags, args=kwargs.get("args"))

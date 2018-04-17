@@ -84,14 +84,23 @@ TEST_TARGETS = [
     "directory_with_tar_base",
     "files_base",
     "files_with_files_base",
+    "files_in_layer_with_files_base",
     "files_with_tar_base",
     "tar_base",
     "tar_with_files_base",
     "tar_with_tar_base",
+    "tars_in_layer_with_tar_base",
     "docker_tarball_base",
+    "layers_with_docker_tarball_base",
     # TODO(mattmoor): Re-enable once archive is visible
     # "generated_tarball",
+    "with_unix_epoch_creation_time",
+    "with_millisecond_unix_epoch_creation_time",
+    "with_rfc_3339_creation_time",
+    "with_stamped_creation_time",
+    "with_default_stamped_creation_time",
     "with_env",
+    "layers_with_env",
     "with_double_env",
     "with_label",
     "with_double_label",
@@ -101,6 +110,9 @@ TEST_TARGETS = [
     "link_with_files_base",
     "build_with_tag",
     "with_passwd",
+    "with_group",
+    "with_empty_files",
+    "with_empty_dirs",
     "gen_image",
     "data_path_image",
     "no_data_path_image",
@@ -117,10 +129,16 @@ TEST_TARGETS = [
     "cc_based_warning",
     "pause_piecemeal",
     "pause_piecemeal_gz",
-    "py_image",
-    "py3_image",
     "cc_image",
+    "d_image",
+    "go_image",
+    "groovy_image",
     "java_image",
+    "nodejs_image",
+    "py3_image",
+    "py_image",
+    "rust_image",
+    "scala_image",
     "war_image",
     "flat",
 ]
@@ -144,7 +162,7 @@ skylark_library(
     name = "bundle",
     srcs = ["bundle.bzl"],
     deps = [
-        ":layers",
+        ":layer_tools",
         "//skylib:label",
     ],
 )
@@ -157,6 +175,7 @@ skylark_library(
         ":flatten",
         ":image",
         ":import",
+        ":layer",
         ":push",
     ],
 )
@@ -165,7 +184,7 @@ skylark_library(
     name = "flatten",
     srcs = ["flatten.bzl"],
     deps = [
-        ":layers",
+        ":layer_tools",
         "//skylib:label",
     ],
 )
@@ -174,7 +193,7 @@ skylark_library(
     name = "image",
     srcs = ["image.bzl"],
     deps = [
-        ":layers",
+        ":layer_tools",
         "//skylib:filetype",
         "//skylib:label",
         "//skylib:path",
@@ -188,7 +207,7 @@ skylark_library(
     name = "import",
     srcs = ["import.bzl"],
     deps = [
-        ":layers",
+        ":layer_tools",
         "//skylib:filetype",
         "//skylib:path",
         "//skylib:zip",
@@ -197,8 +216,20 @@ skylark_library(
 )
 
 skylark_library(
-    name = "layers",
-    srcs = ["layers.bzl"],
+    name = "layer",
+    srcs = ["layer.bzl"],
+    deps = [
+        ":layer_tools",
+        "//skylib:filetype",
+        "//skylib:path",
+        "//skylib:zip",
+        "@bazel_tools//tools/build_defs/hash:hash.bzl",
+    ],
+)
+
+skylark_library(
+    name = "layer_tools",
+    srcs = ["layer_tools.bzl"],
     deps = ["//skylib:path"],
 )
 
@@ -217,7 +248,7 @@ skylark_library(
     name = "push",
     srcs = ["push.bzl"],
     deps = [
-        ":layers",
+        ":layer_tools",
         "//skylib:path",
     ],
 )

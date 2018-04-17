@@ -2,7 +2,7 @@
 
 Travis CI | Bazel CI
 :---: | :---:
-[![Build Status](https://travis-ci.org/bazelbuild/rules_docker.svg?branch=master)](https://travis-ci.org/bazelbuild/rules_docker) | [![Build Status](https://ci.bazel.io/buildStatus/icon?job=rules_docker)](https://ci.bazel.io/job/rules_docker)
+[![Build Status](https://travis-ci.org/bazelbuild/rules_docker.svg?branch=master)](https://travis-ci.org/bazelbuild/rules_docker) | [![Build status](https://badge.buildkite.com/693d7892250cfd44beea3cd95573388200935906a28cd3146d.svg)](https://buildkite.com/bazel/docker-rules-docker-postsubmit)
 
 ## Basic Rules
 
@@ -85,7 +85,7 @@ Add the following to your `WORKSPACE` file to add the external repositories:
 git_repository(
     name = "io_bazel_rules_docker",
     remote = "https://github.com/bazelbuild/rules_docker.git",
-    tag = "v0.3.0",
+    tag = "v0.4.0",
 )
 
 load(
@@ -137,7 +137,7 @@ These work with both `container_image`, `container_bundle`, and the
 `container_bundle`, the image name will be `bazel/my/image:helloworld`.
 For `container_bundle`, it will apply the tags you have specified.
 
-## Authorization
+## Authentication
 
 You can use these rules to access private images using standard Docker
 authentication methods.  e.g. to utilize the [Google Container Registry](
@@ -178,6 +178,7 @@ container_push(
   registry = "gcr.io",
   repository = "my-project/my-image",
   tag = "{BUILD_USER}",
+  creation_time = "{BUILD_TIMESTAMP}",
 
   # Trigger stamping.
   stamp = True,
@@ -392,7 +393,7 @@ node_repositories(package_json = ["//:package.json"])
 # Install your declared Node.js dependencies
 npm_install(
     name = "npm_deps",
-    packages = "//:package.json",
+    package_json = "//:package.json",
 )
 
 # Download base images, etc.
@@ -463,12 +464,27 @@ modified sample from the `distroless` repository:
 ```python
 load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 
-# Create a passwd file with a nonroot user and uid.
-passwd_file(
-    name = "passwd",
+# Create a passwd file with a root and nonroot user and uid.
+passwd_entry(
+    username = "root",
+    uid = 0,
+    gid = 0,
+    name = "root_user",
+)
+
+passwd_entry(
+    username = "nonroot",
     info = "nonroot",
     uid = 1002,
-    username = "nonroot",
+    name = "nonroot_user",
+)
+
+passwd_file(
+    name = "passwd",
+    entries = [
+        ":root_user",
+        ":nonroot_user",
+    ],
 )
 
 # Create a tar file containing the created passwd file
@@ -695,6 +711,10 @@ d_image(
 )
 ```
 
+> NOTE: all application image rules support the `args` string_list
+> attribute.  If specified, they will be appended directly after the
+> container ENTRYPOINT binary name.
+
 ### container_bundle
 
 ```python
@@ -827,6 +847,8 @@ container_pull(name, registry, repository, digest, tag)
 
 A repository rule that pulls down a Docker base image in a manner suitable for
 use with `container_image`'s `base` attribute.
+
+**NOTE:** Set `PULLER_TIMEOUT` env variable to change the default 600s timeout.
 
 <table class="table table-condensed table-bordered table-params">
   <colgroup>
@@ -971,11 +993,163 @@ An executable rule that pushes a Docker image to a Docker registry on `bazel run
   </tbody>
 </table>
 
+<a name="container_layer"></a>
+## container_layer
+
+```python
+container_layer(data_path, directory, files, mode, tars, debs, symlinks, env)
+```
+
+A rule that assembles data into a tarball which can be use as in `layers` attr in `container_image` rule.
+
+<table class="table table-condensed table-bordered table-implicit">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
+  <thead>
+    <tr>
+      <th colspan="2">Implicit output targets</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code><i>name</i>-layer.tar</code></td>
+      <td>
+        <code>A tarball of current layer</code>
+        <p>
+            A data tarball corresponding to the layer.
+        </p>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
+  <thead>
+    <tr>
+      <th colspan="2">Attributes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>name</code></td>
+      <td>
+        <code>Name, required</code>
+        <p>A unique name for this rule.</p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>data_path</code></td>
+      <td>
+        <code>String, optional</code>
+        <p>Root path of the files.</p>
+        <p>
+          The directory structure from the files is preserved inside the
+          Docker image, but a prefix path determined by `data_path`
+          is removed from the directory structure. This path can
+          be absolute from the workspace root if starting with a `/` or
+          relative to the rule's directory. A relative path may starts with "./"
+          (or be ".") but cannot use go up with "..". By default, the
+          `data_path` attribute is unused, and all files should have no prefix.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>directory</code></td>
+      <td>
+        <code>String, optional</code>
+        <p>Target directory.</p>
+        <p>
+          The directory in which to expand the specified files, defaulting to '/'.
+          Only makes sense accompanying one of files/tars/debs.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>files</code></td>
+      <td>
+        <code>List of files, optional</code>
+        <p>File to add to the layer.</p>
+        <p>
+          A list of files that should be included in the Docker image.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>mode</code></td>
+      <td>
+        <code>String, default to 0555</code>
+        <p>
+          Set the mode of files added by the <code>files</code> attribute.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>tars</code></td>
+      <td>
+        <code>List of files, optional</code>
+        <p>Tar file to extract in the layer.</p>
+        <p>
+          A list of tar files whose content should be in the Docker image.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>debs</code></td>
+      <td>
+        <code>List of files, optional</code>
+        <p>Debian package to install.</p>
+        <p>
+          A list of debian packages that will be installed in the Docker image.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>symlinks</code></td>
+      <td>
+        <code>Dictionary, optional</code>
+        <p>Symlinks to create in the Docker image.</p>
+        <p>
+          <code>
+          symlinks = {
+           "/path/to/link": "/path/to/target",
+           ...
+          },
+          </code>
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>env</code></td>
+      <td>
+        <code>Dictionary from strings to strings, optional</code>
+        <p><a href="https://docs.docker.com/engine/reference/builder/#env">Dictionary
+               from environment variable names to their values when running the
+               Docker image.</a></p>
+        <p>
+          <code>
+          env = {
+            "FOO": "bar",
+            ...
+          },
+          </code>
+        </p>
+	<p>The values of this field support stamp variables.</p>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
 <a name="container_image"></a>
 ## container_image
 
 ```python
-container_image(name, base, data_path, directory, files, legacy_repository_naming, mode, tars, debs, symlinks, entrypoint, cmd, env, labels, ports, volumes, workdir, repository)
+container_image(name, base, data_path, directory, files, legacy_repository_naming, mode, tars, debs, symlinks, entrypoint, cmd, creation_time, env, labels, ports, volumes, workdir, layers, repository)
 ```
 
 <table class="table table-condensed table-bordered table-implicit">
@@ -1180,6 +1354,16 @@ container_image(name, base, data_path, directory, files, legacy_repository_namin
       </td>
     </tr>
     <tr>
+      <td><code>creation_time</code></td>
+      <td>
+        <code>String, optional, default to {BUILD_TIMESTAMP} when stamp = True, otherwise 0</code>
+        <p>The image's creation timestamp.</p>
+        <p>Acceptable formats: Integer or floating point seconds since Unix
+           Epoch, RFC 3339 date/time.</p>
+        <p>This field supports stamp variables.</p>
+      </td>
+    </tr>
+    <tr>
       <td><code>env</code></td>
       <td>
         <code>Dictionary from strings to strings, optional</code>
@@ -1243,6 +1427,14 @@ container_image(name, base, data_path, directory, files, legacy_repository_namin
                this working directory does not affect the other actions (e.g.,
                adding files).</p>
 	<p>This field supports stamp variables.</p>
+      </td>
+    </tr>
+    <tr>
+      <td><code>layers</code></td>
+      <td>
+        <code>Label list, optional</code>
+        <p>List of `container_layer` targets. </p>
+        <p>The data from each `container_layer` will be part of container image, and the environment variable will be available in the image as well.</p>
       </td>
     </tr>
     <tr>

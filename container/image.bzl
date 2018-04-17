@@ -59,11 +59,16 @@ load(
     _string_to_label = "string_to_label",
 )
 load(
-    "//container:layers.bzl",
+    "//container:layer_tools.bzl",
     _assemble_image = "assemble",
     _get_layers = "get_from_target",
     _incr_load = "incremental_load",
     _layer_tools = "tools",
+)
+load(
+    "//container:layer.bzl",
+    "LayerInfo",
+    _layer = "layer",
 )
 load(
     "//skylib:path.bzl",
@@ -77,76 +82,17 @@ load(
     _serialize_dict = "dict_to_associative_list",
 )
 
-def magic_path(ctx, f):
-  # Right now the logic this uses is a bit crazy/buggy, so to support
-  # bug-for-bug compatibility in the foo_image rules, expose the logic.
-  # See also: https://github.com/bazelbuild/rules_docker/issues/106
-  # See also: https://groups.google.com/forum/#!topic/bazel-discuss/1lX3aiTZX3Y
-
-  if ctx.attr.data_path:
-    # If data_prefix is specified, then add files relative to that.
-    data_path = _join_path(
-        dirname(ctx.outputs.out.short_path),
-        _canonicalize_path(ctx.attr.data_path))
-    return strip_prefix(f.short_path, data_path)
-  else:
-    # Otherwise, files are added without a directory prefix at all.
-    return f.basename
-
-def _build_layer(ctx, files=None, file_map=None, empty_files=None,
-                 directory=None, symlinks=None, debs=None, tars=None):
-  """Build the current layer for appending it the base layer.
-
-  Args:
-    files: File list, overrides ctx.files.files
-    directory: str, overrides ctx.attr.directory
-    symlinks: str Dict, overrides ctx.attr.symlinks
-  """
-
-  layer = ctx.outputs.layer
-  build_layer = ctx.executable.build_layer
-  args = [
-      "--output=" + layer.path,
-      "--directory=" + directory,
-      "--mode=" + ctx.attr.mode,
-  ]
-
-  args += ["--file=%s=%s" % (f.path, magic_path(ctx, f)) for f in files]
-  args += ["--file=%s=%s" % (f.path, path) for (path, f) in file_map.items()]
-  args += ["--empty_file=%s" % f for f in empty_files or []]
-  args += ["--tar=" + f.path for f in tars]
-  args += ["--deb=" + f.path for f in debs]
-  for k in symlinks:
-    if ':' in k:
-      fail("The source of a symlink cannot contain ':', got: %s" % k)
-  args += ["--link=%s:%s" % (k, symlinks[k])
-           for k in symlinks]
-  arg_file = ctx.new_file(ctx.label.name + ".layer.args")
-  ctx.file_action(arg_file, "\n".join(args))
-
-  ctx.action(
-      executable = build_layer,
-      arguments = ["--flagfile=" + arg_file.path],
-      inputs = files + file_map.values() + tars + debs + [arg_file],
-      outputs = [layer],
-      use_default_shell_env=True,
-      mnemonic="ImageLayer"
-  )
-  return layer, _sha256(ctx, layer)
-
-def _zip_layer(ctx, layer):
-  zipped_layer = _gzip(ctx, layer)
-  return zipped_layer, _sha256(ctx, zipped_layer)
-
-def _get_base_config(ctx):
+def _get_base_config(ctx, base):
   if ctx.files.base:
     # The base is the first layer in container_parts if provided.
-    l = _get_layers(ctx, ctx.attr.base, ctx.files.base)
+    l = _get_layers(ctx, ctx.attr.base, base)
     return l.get("config")
 
-def _image_config(ctx, layer_name, entrypoint=None, cmd=None, env=None):
+def _image_config(ctx, layer_names, entrypoint=None, cmd=None,
+                  creation_time=None, env=None, base_config=None,
+                  layer_name=None):
   """Create the configuration for a new container image."""
-  config = ctx.new_file(ctx.label.name + ".config")
+  config = ctx.new_file(ctx.label.name + "." + layer_name + ".config")
 
   label_file_dict = _string_to_label(
       ctx.files.label_files, ctx.attr.label_file_strings)
@@ -170,6 +116,13 @@ def _image_config(ctx, layer_name, entrypoint=None, cmd=None, env=None):
   ] + [
       "--volumes=%s" % x for x in ctx.attr.volumes
   ]
+  if creation_time:
+    args += ["--creation_time=%s" % creation_time]
+  elif ctx.attr.stamp:
+    # If stamping is enabled, and the creation_time is not manually defined,
+    # default to '{BUILD_TIMESTAMP}'.
+    args += ["--creation_time={BUILD_TIMESTAMP}"]
+
   _labels = _serialize_dict(labels)
   if _labels:
     args += ["--labels=%s" % x for x in _labels.split(',')]
@@ -182,16 +135,16 @@ def _image_config(ctx, layer_name, entrypoint=None, cmd=None, env=None):
   if ctx.attr.workdir:
     args += ["--workdir=" + ctx.attr.workdir]
 
-  inputs = [layer_name]
-  args += ["--layer=@" + layer_name.path]
+  inputs = layer_names
+  for layer_name in layer_names:
+    args += ["--layer=@" + layer_name.path]
 
   if ctx.attr.label_files:
     inputs += ctx.files.label_files
 
-  base = _get_base_config(ctx)
-  if base:
-    args += ["--base=%s" % base.path]
-    inputs += [base]
+  if base_config:
+    args += ["--base=%s" % base_config.path]
+    inputs += [base_config]
 
   if ctx.attr.stamp:
     stamp_inputs = [ctx.info_file, ctx.version_file]
@@ -216,62 +169,74 @@ def _repository_name(ctx):
   # the v2 registry specification.
   return _join_path(ctx.attr.repository, ctx.label.package)
 
-def _impl(ctx, files=None, file_map=None, empty_files=None, directory=None,
-          entrypoint=None, cmd=None, symlinks=None, output=None, env=None,
-          debs=None, tars=None):
+def _impl(ctx, base=None, files=None, file_map=None, empty_files=None,
+          empty_dirs=None, directory=None, entrypoint=None, cmd=None,
+          creation_time=None, symlinks=None, env=None, layers=None, debs=None,
+          tars=None, output_executable=None, output_tarball=None,
+          output_layer=None):
   """Implementation for the container_image rule.
 
   Args:
     ctx: The bazel rule context
+    base: File, overrides ctx.attr.base and ctx.files.base[0]
     files: File list, overrides ctx.files.files
     file_map: Dict[str, File], defaults to {}
     empty_files: str list, overrides ctx.attr.empty_files
+    empty_dirs: Dict[str, str], overrides ctx.attr.empty_dirs
     directory: str, overrides ctx.attr.directory
     entrypoint: str List, overrides ctx.attr.entrypoint
     cmd: str List, overrides ctx.attr.cmd
+    creation_time: str, overrides ctx.attr.creation_time
     symlinks: str Dict, overrides ctx.attr.symlinks
-    output: File to use as output for script to load docker image
     env: str Dict, overrides ctx.attr.env
+    layers: label List, overrides ctx.attr.layers
     debs: File list, overrides ctx.files.debs
     tars: File list, overrides ctx.files.tars
+    output_executable: File to use as output for script to load docker image
+    output_tarball: File, overrides ctx.outputs.out
+    output_layer: File, overrides ctx.outputs.layer
   """
+  entrypoint=entrypoint or ctx.attr.entrypoint
+  cmd=cmd or ctx.attr.cmd
+  creation_time=creation_time or ctx.attr.creation_time
+  output_executable = output_executable or ctx.outputs.executable
+  output_tarball = output_tarball or ctx.outputs.out
+  output_layer = output_layer or ctx.outputs.layer
 
-  file_map = file_map or {}
-  files = files or ctx.files.files
-  empty_files = empty_files or ctx.attr.empty_files
-  directory = directory or ctx.attr.directory
-  entrypoint = entrypoint or ctx.attr.entrypoint
-  cmd = cmd or ctx.attr.cmd
-  symlinks = symlinks or ctx.attr.symlinks
-  output = output or ctx.outputs.executable
-  env = env or ctx.attr.env
-  debs = debs or ctx.files.debs
-  tars = tars or ctx.files.tars
+  # composite a layer from the container_image rule attrs,
+  image_layer = _layer.implementation(ctx=ctx, files=files,
+                                      file_map=file_map,
+                                      empty_files=empty_files,
+                                      empty_dirs=empty_dirs,
+                                      directory=directory,
+                                      symlinks=symlinks,
+                                      debs=debs, tars=tars,
+                                      env=env)
 
-  # Generate the unzipped filesystem layer, and its sha256 (aka diff_id).
-  unzipped_layer, diff_id = _build_layer(ctx, files=files, file_map=file_map,
-                                         empty_files=empty_files,
-                                         directory=directory, symlinks=symlinks,
-                                         debs=debs, tars=tars)
-
-  # Generate the zipped filesystem layer, and its sha256 (aka blob sum)
-  zipped_layer, blob_sum = _zip_layer(ctx, unzipped_layer)
-
-  # Generate the new config using the attributes specified and the diff_id
-  config_file, config_digest = _image_config(
-      ctx, diff_id, entrypoint=entrypoint, cmd=cmd, env=env)
-
-  # Construct a temporary name based on the build target.
-  tag_name = _repository_name(ctx) + ":" + ctx.label.name
+  layer_providers= layers or ctx.attr.layers
+  layers = [provider[LayerInfo] for provider in layer_providers] + image_layer
 
   # Get the layers and shas from our base.
   # These are ordered as they'd appear in the v2.2 config,
   # so they grow at the end.
-  parent_parts = _get_layers(ctx, ctx.attr.base, ctx.files.base)
-  zipped_layers = parent_parts.get("zipped_layer", []) + [zipped_layer]
-  shas = parent_parts.get("blobsum", []) + [blob_sum]
-  unzipped_layers = parent_parts.get("unzipped_layer", []) + [unzipped_layer]
-  diff_ids = parent_parts.get("diff_id", []) + [diff_id]
+  parent_parts = _get_layers(ctx, ctx.attr.base, base)
+  zipped_layers = parent_parts.get("zipped_layer", []) + [layer.zipped_layer for layer in layers]
+  shas = parent_parts.get("blobsum", [])  + [layer.blob_sum for layer in layers]
+  unzipped_layers = parent_parts.get("unzipped_layer", []) + [layer.unzipped_layer for layer in layers]
+  layer_diff_ids = [layer.diff_id for layer in layers]
+  diff_ids = parent_parts.get("diff_id", []) + layer_diff_ids
+
+  # Get the config for the base layer
+  config_file = _get_base_config(ctx, base)
+  # Generate the new config layer by layer, using the attributes specified and the diff_id
+  for i, layer in enumerate(layers):
+    config_file, config_digest = _image_config(
+        ctx, [layer_diff_ids[i]],
+        entrypoint=entrypoint, cmd=cmd, creation_time=creation_time,
+        env=layer.env, base_config=config_file, layer_name=str(i), )
+
+  # Construct a temporary name based on the build target.
+  tag_name = _repository_name(ctx) + ":" + ctx.label.name
 
   # These are the constituent parts of the Container image, which each
   # rule in the chain must preserve.
@@ -301,39 +266,38 @@ def _impl(ctx, files=None, file_map=None, empty_files=None, directory=None,
       tag_name: container_parts
   }
 
-  _incr_load(ctx, images, output,
+  _incr_load(ctx, images, output_executable,
              run=not ctx.attr.legacy_run_behavior,
              run_flags=ctx.attr.docker_run_flags)
-  _assemble_image(ctx, images, ctx.outputs.out)
+  _assemble_image(ctx, images, output_tarball)
 
   runfiles = ctx.runfiles(
       files = unzipped_layers + diff_ids + [config_file, config_digest] +
       ([container_parts["legacy"]] if container_parts["legacy"] else []))
   return struct(runfiles = runfiles,
-                files = depset([ctx.outputs.layer]),
+                files = depset([output_layer]),
                 container_parts = container_parts)
 
-_attrs = dict({
+_attrs = dict(_layer.attrs.items() + {
     "base": attr.label(allow_files = container_filetype),
-    "data_path": attr.string(),
-    "directory": attr.string(default = "/"),
-    "tars": attr.label_list(allow_files = tar_filetype),
-    "debs": attr.label_list(allow_files = deb_filetype),
-    "files": attr.label_list(allow_files = True),
     "legacy_repository_naming": attr.bool(default = False),
     # TODO(mattmoor): Default this to False.
     "legacy_run_behavior": attr.bool(default = True),
-    "docker_run_flags": attr.string(),
-    "mode": attr.string(default = "0555"),  # 0555 == a+rx
-    "symlinks": attr.string_dict(),
-    "entrypoint": attr.string_list(),
-    "cmd": attr.string_list(),
+    # Run the container using host networking, so that the service is
+    # available to the developer without having to poke around with
+    # docker inspect.
+    "docker_run_flags": attr.string(
+        default = "-i --rm --network=host",
+    ),
     "user": attr.string(),
-    "env": attr.string_dict(),
     "labels": attr.string_dict(),
+    "cmd": attr.string_list(),
+    "creation_time": attr.string(),
+    "entrypoint": attr.string_list(),
     "ports": attr.string_list(),  # Skylark doesn't support int_list...
     "volumes": attr.string_list(),
     "workdir": attr.string(),
+    "layers": attr.label_list(providers = [LayerInfo]),
     "repository": attr.string(default = "bazel"),
     "stamp": attr.bool(default = False),
     # Implicit/Undocumented dependencies.
@@ -341,13 +305,6 @@ _attrs = dict({
         allow_files = True,
     ),
     "label_file_strings": attr.string_list(),
-    "empty_files": attr.string_list(),
-    "build_layer": attr.label(
-        default = Label("//container:build_tar"),
-        cfg = "host",
-        executable = True,
-        allow_files = True,
-    ),
     "create_image_config": attr.label(
         default = Label("//container:create_image_config"),
         cfg = "host",
@@ -444,6 +401,9 @@ def _validate_command(name, argument):
 #          "/path/to/link": "/path/to/target",
 #          ...
 #      },
+#
+#      # Other layers built from container_layer rule
+#      layers = [":c-lang-layer", ":java-lang-layer", ...]
 #
 #      # https://docs.docker.com/engine/reference/builder/#entrypoint
 #      entrypoint="...", or
