@@ -28,6 +28,9 @@ container = struct(
 
 # The release of the github.com/google/containerregistry to consume.
 CONTAINERREGISTRY_RELEASE = "v0.0.26"
+CONTAINERREGISTRY_COMMIT = "1a8f07f283089b73363365ab30cdb2d5e3aaba2c"
+CONTAINERREGISTRY_SHA = "9ebe3e665ffe488a835e737cf80be273f8af9ab7f1993ac2c7c1b9a7b6923084"
+
 
 # The release of the container-structure-test repository to use.
 # Updated around 1/22/2018.
@@ -56,10 +59,11 @@ def repositories():
     )
 
   if "containerregistry" not in excludes:
-    native.git_repository(
+    native.http_archive(
       name = "containerregistry",
-      remote = "https://github.com/google/containerregistry.git",
-      tag = CONTAINERREGISTRY_RELEASE,
+      url = "https://github.com/zenreach/containerregistry/archive/%s.tar.gz" % CONTAINERREGISTRY_COMMIT,
+      strip_prefix = "containerregistry-%s" % CONTAINERREGISTRY_COMMIT,
+      sha256 = CONTAINERREGISTRY_SHA,
     )
 
   # TODO(mattmoor): Remove all of this (copied from google/containerregistry)

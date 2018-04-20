@@ -108,14 +108,14 @@ def _image_config(ctx, layer_names, entrypoint=None, cmd=None,
   args = [
       "--output=%s" % config.path,
   ] + [
-      "--entrypoint=%s" % x for x in entrypoint
-  ] + [
-      "--command=%s" % x for x in cmd
-  ] + [
       "--ports=%s" % x for x in ctx.attr.ports
   ] + [
       "--volumes=%s" % x for x in ctx.attr.volumes
   ]
+
+  args += ["--entrypoint=%s" % x for x in entrypoint] if len(entrypoint) > 0 else ["--entrypoint="]
+  args += ["--command=%s" % x for x in cmd] if len(cmd) > 0 else ["--command="]
+
   if creation_time:
     args += ["--creation_time=%s" % creation_time]
   elif ctx.attr.stamp:
@@ -196,8 +196,8 @@ def _impl(ctx, base=None, files=None, file_map=None, empty_files=None,
     output_tarball: File, overrides ctx.outputs.out
     output_layer: File, overrides ctx.outputs.layer
   """
-  entrypoint=entrypoint or ctx.attr.entrypoint
-  cmd=cmd or ctx.attr.cmd
+  entrypoint=entrypoint if entrypoint != None else ctx.attr.entrypoint 
+  cmd=cmd if cmd != None else ctx.attr.cmd 
   creation_time=creation_time or ctx.attr.creation_time
   output_executable = output_executable or ctx.outputs.executable
   output_tarball = output_tarball or ctx.outputs.out

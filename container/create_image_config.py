@@ -156,8 +156,8 @@ def main():
       author='Bazel',
       created_by='bazel build ...',
       layers=layers,
-      entrypoint=list(map(Stamp, fix_dashdash(args.entrypoint))),
-      cmd=list(map(Stamp, fix_dashdash(args.command))),
+      entrypoint=list(filter(bool, map(Stamp, fix_dashdash(args.entrypoint)))),
+      cmd=list(filter(bool, map(Stamp, fix_dashdash(args.command)))),
       creation_time=creation_time,
       user=Stamp(args.user),
       labels=labels, env={
