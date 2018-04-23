@@ -151,6 +151,7 @@ def _image_config(ctx, layer_names, entrypoint=None, cmd=None,
     args += ["--stamp-info-file=%s" % f.path for f in stamp_inputs]
     inputs += stamp_inputs
 
+  print("args: %s" % args)
   ctx.action(
       executable = ctx.executable.create_image_config,
       arguments = args,
