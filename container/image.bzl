@@ -131,7 +131,7 @@ def _image_config(ctx, layer_names, entrypoint=None, cmd=None,
     args += ["--env=%s" % x for x in _env.split(',')]
 
   if cmd == []:
-    args += ["command='[]'"]
+    args += ["command=''"]
 
   if ctx.attr.user:
     args += ["--user=" + ctx.attr.user]
