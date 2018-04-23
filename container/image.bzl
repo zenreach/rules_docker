@@ -130,7 +130,7 @@ def _image_config(ctx, layer_names, entrypoint=None, cmd=None,
   if _env:
     args += ["--env=%s" % x for x in _env.split(',')]
 
-  if cmd=[]:
+  if cmd == []:
     args += ["command='[]'"]
 
   if ctx.attr.user:
