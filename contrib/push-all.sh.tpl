@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Copyright 2017 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +38,8 @@ function sync() {
 %{push_statements}
 
 # Wait for all of the subprocesses, failing the script if any of them failed.
-for pid in ${PIDS[@]}; do
-    wait ${pid}
-done
+if [ "${#PIDS[@]}" != 0 ]; then
+    for pid in ${PIDS[@]}; do
+        wait ${pid}
+    done
+fi

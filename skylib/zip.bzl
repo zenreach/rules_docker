@@ -14,23 +14,34 @@
 """Functions for producing the gzip of an artifact."""
 
 def gzip(ctx, artifact):
-  """Create an action to compute the gzipped artifact."""
-  out = ctx.new_file(artifact.basename + ".gz")
-  ctx.action(
-      command = 'gzip -n < %s > %s' % (artifact.path, out.path),
-      inputs = [artifact],
-      outputs = [out],
-      mnemonic = "GZIP")
-  return out
+    """Create an action to compute the gzipped artifact."""
+    out = ctx.new_file(artifact.basename + ".gz")
+    ctx.action(
+        command = "%s -n < %s > %s" % (ctx.executable.gzip.path, artifact.path, out.path),
+        inputs = [artifact, ctx.executable.gzip],
+        outputs = [out],
+        use_default_shell_env = True,
+        mnemonic = "GZIP",
+    )
+    return out
 
 def gunzip(ctx, artifact):
-  """Create an action to compute the gunzipped artifact."""
-  out = ctx.new_file(artifact.basename + ".nogz")
-  ctx.action(
-      command = 'gunzip < %s > %s' % (artifact.path, out.path),
-      inputs = [artifact],
-      outputs = [out],
-      mnemonic = "GUNZIP")
-  return out
+    """Create an action to compute the gunzipped artifact."""
+    out = ctx.new_file(artifact.basename + ".nogz")
+    ctx.action(
+        command = "%s -d < %s > %s" % (ctx.executable.gzip.path, artifact.path, out.path),
+        inputs = [artifact, ctx.executable.gzip],
+        outputs = [out],
+        use_default_shell_env = True,
+        mnemonic = "GUNZIP",
+    )
+    return out
 
-tools = {}
+tools = {
+    "gzip": attr.label(
+        allow_files = True,
+        cfg = "host",
+        default = Label("@gzip//:gzip"),
+        executable = True,
+    ),
+}
